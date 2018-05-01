@@ -10,9 +10,11 @@ import re
 # 映射关系
 LANGUANGE_MAPPED_1 = {
     "en": "values/",
+    "en-us": "values/",
     "ar-eg": "values-ar/",
     "de-de": "values-de/",
     "es-xl": "values-es/",
+    "es-es": "values-es/",
     "es-us": "values-es-rUS/",
     "fr-fr": "values-fr/",
     "hi-in": "values-hi/",
@@ -35,9 +37,11 @@ LANGUANGE_MAPPED_1 = {
 
 LANGUANGE_MAPPED_2 = {
     "en": "values/",
+    "enus": "values/",
     "areg": "values-ar/",
     "dede": "values-de/",
     "esxl": "values-es/",
+    "eses": "values-es/",
     "esus": "values-es-rUS/",
     "frfr": "values-fr/",
     "hiin": "valueshi/",
@@ -61,6 +65,10 @@ LANGUANGE_MAPPED_2 = {
 LANGUANGE_MAPPED = dict(LANGUANGE_MAPPED_1.items() +
                         LANGUANGE_MAPPED_2.items())
 
+# 支持的array，可自行扩充
+directAddNames = ['array', 'string-array', 'integer-array']
+
+FORMAT = '    '
 
 def mergeStrings(level, pathIn, pathOut, annotation):
     '''
@@ -110,7 +118,7 @@ def mergeSingleStrings(pathIn, pathOut, annotation):
     '''
 
     # 自动添加开始处的注释
-    strs = '\n    <!--' + annotation + ' by auto merge-->\n'
+    strs = '\n' + FORMAT + '<!--' + annotation + ' by auto merge-->\n'
     f = open(pathIn)
     # 读取待合入文案的所有内容
     lines = f.readlines()
@@ -120,32 +128,36 @@ def mergeSingleStrings(pathIn, pathOut, annotation):
     for line in lines:
         # 过滤头尾空白字符
         line = line.strip()
+        # 过滤头尾特殊空白字符
+        line = re.sub(r'^\xc2\xa0|\xc2\xa0$', '', line)
         lineTemp = line
-        # 通过正则匹配注释，是注释直接加入
-        if re.match(r'^\s*<!--.*-->\s*$', lineTemp):
-            strs = strs + '    ' + line + '\n'
+        # 判断是否直接加入（1.注释 2.array头尾）
+        if canDirectAdd(lineTemp):
+            strs = strs + FORMAT + line + '\n'
             continue
-        # 通过正则提取具体的文案(<string name="">...</string>)
-        lineTemps = re.split(
-            r'^\s*<\s*string\s+name\s*=\s*\".+\"\s*>|</\s*string\s*>\s*$', lineTemp)
+        # 尝试提取具体的文案(1.<string name="">...</string> 2.<item>...</item>)
+        lineTemps = tryExtractStringContent(lineTemp)
         # 不是文案，继续下面一行
-        if len(lineTemps) != 3:
+        if lineTemps == None:
             continue
         # 是文案，提取文案内容
         contet = lineTemps[1]
-        # 对文案内容进行特殊字符格式检查并自动纠正，目前包括%、和单双引号
+        # 对文案内容进行特殊字符格式检查并自动纠正，目前包括%、单双引号
         lineTemp = lineTemp.replace(contet, checkSpecialChars(contet))
+
         # 文案特殊字符使用错误进行自动纠正之后，输出原文和纠正之后的文案，方便用户进行判断
         if line != lineTemp:
+            print ''
             print '#########################注意 START #########################'
             print '#########################返回文案是[%s]，格式检查自动纠正为[%s]，请确认!' % (line, lineTemp)
             print '#########################注意  END  #########################'
-        # 每行前面添加一个TAB(自动格式化)
-        strs = strs + '    ' + lineTemp + '\n'
+
+        # 每行前面添加相应空格(自动格式化)
+        strs = strs + lineTemps[-1] + lineTemp + '\n'
         count = count + 1
 
     # 自动添加结尾处的注释
-    strs = strs + '    <!--' + annotation + ' by auto merge-->\n'
+    strs = strs + FORMAT + '<!--' + annotation + ' by auto merge-->\n'
     # 最后一行添加</resources>
     strs = strs + '\n</resources>'
     f.close()
@@ -166,11 +178,52 @@ def mergeSingleStrings(pathIn, pathOut, annotation):
     print '合入文案:%d条' % (count)
     # 考虑到多语公司返回文案有可能格式不太规范，这里用放宽条件的正则匹配寻找返回多语中的文案条数，然后和合入的文案条数进行对比，不符则输出提示
     originCount = len(re.findall(
-        r'<\s*string\s*name\s*=\s*\".+\"\s*>', ''.join(lines), re.I))
+        r'<\s*string\s*name\s*=\s*\".+\"\s*>|<\s*item\s*>', ''.join(lines), re.I))
+
     if(originCount != count):
+        print ''
         print '#########################警告 START #########################'
-        print '#########################返回文案有%d条，只合入了%d条文案，请确认' % (originCount, count)
+        print '#########################返回文案有%d条(每个<string>、<item>都算一条文案)，只合入了%d条文案，请确认!' % (originCount, count)
         print '#########################注警告 END  #########################'
+
+
+def canDirectAdd(line):
+    '''
+    判断是否直接加入
+    1.注释直接加入
+    2.array 头尾直接加入
+    '''
+    names = ''
+    for name in directAddNames:
+        names = names + name + '|'
+    names = names[:-1]
+
+    if re.match(r'^\s*<!--.*-->\s*$', line):
+        return True
+    elif re.match(r'^\s*<(%s)\s+name\s*=\s*\"[^\"]+\"\s*>\s*$' % (names), line):
+        return True
+    elif re.match(r'^\s*<\/\s*(%s)\s*>\s*$' % (names), line):
+        return True
+    else:
+        return False
+
+
+def tryExtractStringContent(line):
+    '''
+    尝试提取文案
+    '''
+    lines = re.split(
+        r'^\s*<\s*string\s+name\s*=\s*\"[^\"]+\"\s*>|</\s*string\s*>\s*$', line)
+    if len(lines) == 3:
+        lines.append(FORMAT)
+        return lines
+
+    lines = re.split(r'^\s*<\s*item\s*>|</\s*item\s*>\s*$', line)
+    if len(lines) == 3:
+        lines.append(FORMAT + FORMAT)
+        return lines
+
+    return None
 
 
 def checkSpecialChars(contet):
